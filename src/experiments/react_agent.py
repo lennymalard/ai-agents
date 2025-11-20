@@ -1,5 +1,9 @@
 import ollama
+from openai import OpenAI
 import re
+
+API_KEY_PATH = "../api_keys/openrouter.txt"
+API_KEY = open(API_KEY_PATH, "r").readline()
 
 def calculate(expression: str):
     return eval(expression)
@@ -15,8 +19,23 @@ def serialize_messages(messages):
     return history
 
 class Agent:
-    def __init__(self, model: str, system: str, tools: list):
-        models_list = [model.model for model in ollama.list()["models"]]
+    def __init__(self, model: str, system: str, tools: list, local=True):
+        self.local = local
+
+        if local:
+            self.client = None
+            models_list = [model.model for model in ollama.list()["models"]]
+        else:
+            self.client = OpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=API_KEY,
+            )
+            models_list = [
+                "deepseek/deepseek-r1-distill-llama-70b:free",
+                "x-ai/grok-4.1-fast:free",
+                "google/gemma-3-27b-it:free",
+                "deepseek/deepseek-chat-v3-0324:free"
+            ]
         if model not in models_list:
             raise ValueError(f"{model} is not available. Available models : {models_list}")
 
@@ -53,18 +72,26 @@ class Agent:
         return self.run()
 
     def chat(self):
-        return ollama.chat(
-            model=self.model,
-            messages=self.messages,
-            stream=False,
-            options={"stop": ["PAUSE"]}
-        )
+        if self.local:
+            response = ollama.chat(
+                model=self.model,
+                messages=self.messages,
+                stream=False,
+                options={"stop": ["PAUSE"]}
+            )
+            return self.format_message(role=response["message"].role, content=response["message"].content)
+        else:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=self.messages,
+                stop=["\nPAUSE\n", "PAUSE", "\nPAUSE", "PAUSE\n"]
+            )
+            return self.format_message(response.choices[0].message.role, response.choices[0].message.content)
 
     def run(self):
         response = self.chat()
-        response_message = self.format_message(response["message"].role, response["message"].content)
-        self.messages.append(response_message)
-        return self.parse_answer(response_message["content"])
+        self.messages.append(response)
+        return self.parse_answer(response["content"])
 
     def query(self, question, max_try=5):
         #TODO stop it if answer found
@@ -72,13 +99,13 @@ class Agent:
         try_i = 0
         while try_i < max_try:
             try_i+=1
-            assistant_message = self.chat()["message"].content
-            action_name, action_args = self.parse_action(assistant_message)
+            response = self.chat()
+            action_name, action_args = self.parse_action(response["content"])
             if action_name and action_args:
                 try:
                     action_result = ACTIONS_DICT[action_name](action_args)
                     observation = action_result
-                    self.messages.append(self.format_message(role="assistant", content=assistant_message))
+                    self.messages.append(self.format_message(role="assistant", content=response["content"]))
                     self.messages.append(self.format_message(role="user", content=f"Observation : {observation}"))
                 except KeyError:
                     pass
