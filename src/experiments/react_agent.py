@@ -19,7 +19,7 @@ def serialize_messages(messages):
     return history
 
 class Agent:
-    def __init__(self, model: str, system: str, tools: list, local=True):
+    def __init__(self, model: str, system: str, tools: list, local: bool =True):
         self.local = local
 
         if local:
@@ -68,8 +68,7 @@ class Agent:
         return None
 
     def __call__(self, message):
-        self.messages.append(self.format_message(role= "user", content=message))
-        return self.run()
+        return self.query(message)
 
     def chat(self):
         if self.local:
@@ -151,7 +150,7 @@ Answer: Hello! How can I help?
 """.strip()
 
 actions_list = [calculate]
-agent = Agent("gemma3:27b", system_prompt, actions_list)
+agent = Agent("llama3.2:latest", system_prompt, actions_list)
 
-print(agent.query("Prends la circonférence de la Terre (équateur) et la circonférence de la Lune ; multiplie la circonférence terrestre par 7, ajoute la circonférence lunaire multipliée par 12, soustrais la distance moyenne Terre–Lune, puis divise le tout par 1000."))
+print(agent("Prends la circonférence de la Terre (équateur) et la circonférence de la Lune ; multiplie la circonférence terrestre par 7, ajoute la circonférence lunaire multipliée par 12, soustrais la distance moyenne Terre–Lune, puis divise le tout par 1000."))
 print(serialize_messages(agent.messages))
