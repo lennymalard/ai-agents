@@ -121,6 +121,5 @@ Answer: Hello! How can I help?
 tools_list = [calculate]
 agent = Agent("llama3.2:latest", system_prompt, tools_list)
 
-#print(agent("Bonjour comment t'appelles-tu ?"))
 print(agent.query("Combien y a t-il de doigts sur une main ? Multiplie cette valeur par 5. Ensuite, multiplie le nombre de membres qu'à un être humain par 2."))
 print(serialize_messages(agent.messages))
