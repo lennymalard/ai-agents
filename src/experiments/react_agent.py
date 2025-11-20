@@ -94,21 +94,25 @@ class Agent:
         return self.parse_answer(response["content"])
 
     def query(self, question, max_try=5):
-        #TODO stop it if answer found
         self.messages.append(self.format_message(role="user", content=f"Question : {question}"))
         try_i = 0
         while try_i < max_try:
             try_i+=1
-            response = self.chat()
-            action_name, action_args = self.parse_action(response["content"])
-            if action_name and action_args:
-                try:
-                    action_result = ACTIONS_DICT[action_name](action_args)
-                    observation = action_result
-                    self.messages.append(self.format_message(role="assistant", content=response["content"]))
-                    self.messages.append(self.format_message(role="user", content=f"Observation : {observation}"))
-                except KeyError:
-                    pass
+            observation = "An error occurred. No observations are currently available."
+            assistant_message = self.chat()["content"]
+            self.messages.append(self.format_message(role="assistant", content=assistant_message))
+            answer = self.parse_answer(assistant_message)
+            if answer:
+                return answer
+            else:
+                action_name, action_args = self.parse_action(assistant_message)
+                if action_name and action_args:
+                    try:
+                        action_result = ACTIONS_DICT[action_name](action_args)
+                        observation = action_result
+                    except KeyError:
+                        pass
+                self.messages.append(self.format_message(role="user", content=f"Observation : {observation}"))
         return self.run()
 
 system_prompt = """
@@ -147,7 +151,7 @@ Answer: Hello! How can I help?
 """.strip()
 
 actions_list = [calculate]
-agent = Agent("llama3.2:latest", system_prompt, actions_list)
+agent = Agent("gemma3:27b", system_prompt, actions_list)
 
-print(agent.query("Combien y a t-il de doigts sur une main ? Multiplie cette valeur par 5. Ensuite, multiplie le nombre de membres qu'à un être humain par 2."))
+print(agent.query("Prends la circonférence de la Terre (équateur) et la circonférence de la Lune ; multiplie la circonférence terrestre par 7, ajoute la circonférence lunaire multipliée par 12, soustrais la distance moyenne Terre–Lune, puis divise le tout par 1000."))
 print(serialize_messages(agent.messages))
