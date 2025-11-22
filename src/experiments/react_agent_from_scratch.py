@@ -1,6 +1,7 @@
 import ollama
 from openai import OpenAI
 import re
+import requests
 
 API_KEY_PATH = "../api_keys/openrouter.txt"
 API_KEY = open(API_KEY_PATH, "r").readline()
@@ -8,8 +9,21 @@ API_KEY = open(API_KEY_PATH, "r").readline()
 def calculate(expression: str):
     return eval(expression)
 
+def duckduckgo_search(query: str) -> str:
+    """
+    A search engine.
+    """
+    url = f"https://api.duckduckgo.com"
+    params = {
+        "q": query,
+        "format": "json"
+    }
+    response = requests.get(url, params=params)
+    return response.json()
+
 ACTIONS_DICT = {
-    "calculate": calculate
+    "calculate": calculate,
+    "duckduckgo_search": duckduckgo_search
 }
 
 def serialize_messages(messages):
@@ -125,6 +139,7 @@ Sequence:
 
 Tools:
 - calculate: Python math expression. Output: Number.
+- duckduckgo_search: Search engine. Output: String
 
 IMPORTANT RULES:
 1. **Distinguish Facts from Results**: If you calculate a value (e.g., 365 * 2 = 730), your Answer must clearly state that 730 is the *result*, not the original fact.
@@ -144,6 +159,13 @@ PAUSE
 Observation: 730
 Answer: Il y a 365 jours dans une année. Si on multiplie ce nombre par 2, on obtient 730.
 
+User: Qu'est ce que c'est Python ?
+Thought: I need to go online to get some information.
+Action: duckduckgo_search: What is Python ?
+PAUSE
+Observation: {'Abstract': '','AbstractSource': 'Wikipedia','AbstractText': '','AbstractURL': 'https://en.wikipedia.org/wiki/Python','Answer': '','AnswerType': '','Definition': '','DefinitionSource': '','DefinitionURL': '','Entity': '','Heading': 'Python','Image': '','ImageHeight': 0,'ImageIsLogo': 0,'ImageWidth': 0,'Infobox': '','Redirect': '','RelatedTopics': [{'FirstURL': 'https://duckduckgo.com/Python_(programming_language)','Icon': {'Height': '', 'URL': '/i/7eec482b.png', 'Width': ''},'Result': '<a href="https://duckduckgo.com/Python_(programming_language)">Python (programming language)</a>A high-level, general-purpose programming language.','Text': 'Python (programming language) A high-level, general-purpose programming language.'}]}
+Answer: Python is a programming language.
+
 User: Hello!
 Thought: Polite greeting.
 Answer: Hello! How can I help?
@@ -152,5 +174,6 @@ Answer: Hello! How can I help?
 actions_list = [calculate]
 agent = Agent("gemma3:27b", system_prompt, actions_list)
 
-print(agent("Prends la circonférence de la Terre (équateur) et la circonférence de la Lune ; multiplie la circonférence terrestre par 7, ajoute la circonférence lunaire multipliée par 12, soustrais la distance moyenne Terre–Lune, puis divise le tout par 1000."))
+#print(agent("Prends la circonférence de la Terre (équateur) et la circonférence de la Lune ; multiplie la circonférence terrestre par 7, ajoute la circonférence lunaire multipliée par 12, soustrais la distance moyenne Terre–Lune, puis divise le tout par 1000."))
+print(agent("C'est quoi le kombucha ?"))
 print(serialize_messages(agent.messages))
