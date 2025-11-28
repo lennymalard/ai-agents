@@ -18,19 +18,6 @@ logging.basicConfig(level=logging.INFO)
 API_KEY_PATH = "../api_keys/openrouter.txt"
 API_KEY = open(API_KEY_PATH, "r").readline()
 
-"""@tool
-def duckduckgo_search(query: str) -> str:
-    '''
-    A search engine.
-    '''
-    url = f"https://api.duckduckgo.com"
-    params = {
-        "q": query,
-        "format": "json"
-    }
-    response = requests.get(url, params=params)
-    return response.json()"""
-
 ddg = DDGS()
 
 def ddg_search(query: str, max_results=3):
