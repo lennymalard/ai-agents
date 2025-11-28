@@ -2,14 +2,16 @@ from langgraph.graph import StateGraph, END
 from langchain.tools import tool
 from typing import TypedDict, Annotated
 import operator
-from langchain_core.messages import AnyMessage, SystemMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AnyMessage, SystemMessage, HumanMessage, ToolMessage, AIMessageChunk
 from langchain_ollama import ChatOllama
+from langgraph.checkpoint.memory import MemorySaver
 from IPython.display import Image, display
 import logging
 import requests
 from ddgs import DDGS
 from bs4 import BeautifulSoup
 from datetime import datetime
+import uuid
 
 logging.basicConfig(level=logging.INFO)
 
@@ -50,12 +52,21 @@ def extract_text(soup):
 def search_tool(query: str, max_results: int = 3):
     """
     A web search engine.
-
-    query is the search query.
-    max_results is the maximum number of results to return. Default is 3.
+    Returns a list of tuples: (url, snippet).
+    Use this to find relevant links, but DO NOT use the snippet as the final answer.
     """
     results = ddg_search(query=query, max_results=max_results)
-    urls = [result["href"] for result in results]
+    urls = [(result["href"], result["body"]) for result in results]
+    return urls
+
+
+@tool
+def parse_tool(urls: list[str]):
+    """
+    A website parser.
+    Takes a list of URLs (strings), scrapes them, and returns the full text content.
+    Use this only on URLs that looked relevant in the search step.
+    """
     soups = [scrape_website(url) for url in urls]
     texts = {url: extract_text(soup) for url, soup in zip(urls, soups)}
     return str(texts)
@@ -64,7 +75,7 @@ class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], operator.add]
 
 class Agent:
-    def __init__(self, model, tools, system=""):
+    def __init__(self, model, tools, checkpointer, system=""):
         self.model = model.bind_tools(tools)
         self.system = system
         self.tools = {t.name: t for t in tools}
@@ -78,7 +89,7 @@ class Agent:
         )
         graph.add_edge("action", "llm")
         graph.set_entry_point("llm")
-        self.graph = graph.compile()
+        self.graph = graph.compile(checkpointer=checkpointer)
 
     def call_ollama(self, state: AgentState):
         messages = state["messages"]
@@ -100,42 +111,76 @@ class Agent:
         tool_calls = state["messages"][-1].tool_calls
         return len(tool_calls) > 0
 
+def search_agent(agent):
+    while True:
+        try:
+            thread_id = str(uuid.uuid4())
+            config = {"configurable": {"thread_id": thread_id}}
+
+            is_searching = False
+            human_message = input("\nEnter your query (q or quit to leave the engine): ") # TODO only put it on start or end node 
+            print()
+            if human_message.lower() in ("q", "quit"):
+                break
+            messages = [HumanMessage(human_message)]
+            for message, metadata in agent.graph.stream({"messages": messages}, config, stream_mode="messages"):
+                if message.content and isinstance(message, AIMessageChunk) and metadata["langgraph_node"] == "llm":
+                    print(message.content, end="", flush=True)
+                elif isinstance(message, AIMessageChunk) and message.tool_call_chunks:
+                    if not is_searching:
+                        print("Consulting Search Engine...\n\n", end="", flush=True)
+                        is_searching = True
+                elif metadata["langgraph_node"] == "action":
+                    is_searching = False
+            print("\n")
+        except KeyboardInterrupt:
+            break
+
 system = f"""
-You are an advanced, highly efficient search and retrieval assistant. Your job is to complete user requests by breaking them into clear steps and performing each step in order. You must always think in terms of actions.
+You are a rigorous research agent. Your goal is to answer the user's FULL request.
 
-Your workflow is as follows:
+**TEMPORAL OVERRIDE:**
+Override internal knowledge with today's date: {datetime.now()}. Rely EXCLUSIVELY on `search_tool` for real-time facts.
 
-Action 1: Analyze the request by thinking.
+**TOOLS:**
+1. `search_tool(query)`: Get snippets.
+2. `parse_tool(url)`: Get full text.
 
-Action 2: Determine whether the request requires external factual information. If the request does not require external facts, answer directly without searching.
+**CRITICAL PROTOCOL: SILENT ACCUMULATION**
+If the user asks for multiple things:
+1. **DO NOT generate a text summary** after finding the first item.
+2. Instead, **immediately call the search tool for the SECOND item.**
+3. Keep gathering data until you have ALL parts of the request.
+4. ONLY when you have data for *Weather* AND *Stock* (or all requested parts) do you generate the final response.
 
-Action 3: If the request is complex or multi-part, split it into smaller, well-defined tasks before any searching.
+**ALGORITHM:**
+1. **Analyze**: Break request into parts (e.g., [Part A, Part B]).
+2. **Execute Part A**: Search -> Select -> Parse.
+3. **Check Status**:
+   - Have I finished Part A? YES.
+   - Do I have data for Part B? NO.
+   - **ACTION**: Call `search_tool` for Part B immediately. (Do not output text like "Here is the weather...").
+4. **Execute Part B**: Search -> Select -> Parse.
+5. **Finalize**: Now that Part A and Part B are in context, write the combined answer.
 
-Action 4: For each task that requires external factual information, decide whether one search is sufficient or whether multiple focused searches are needed.
-
-Action 5: Perform searches. Use several small, focused search queries instead of one broad query. Use query variations if initial results are incomplete, ambiguous, low quality, or outdated. Do not hesitate to perform additional searches when needed.
-
-Action 6: Evaluate the search results. If results are insufficient, unclear, conflicting, or not authoritative, repeat searches with different queries (Action 5).
-
-Action 7: Prioritize high-quality sources. Preferred sources include official institutions, government sources, academic and peer-reviewed material, and reputable news or industry sources. You must avoid non-credible or unsourced claims.
-
-Action 8: Produce the answer. Summarize the retrieved information in a concise, clear, and structured way. Highlight only the essential points. Include links to the sources you used. Do not add speculation or unsourced statements.
-
-Action 9: Check completeness. If any part of the request is still unmet or insufficiently supported, perform additional searches and update the answer (Action 5).
-
-You must always follow this action structure, always split tasks when helpful, and always verify whether more searching is needed.
-
-Today's date and current time : {datetime.now()}
+**CONSTRAINT:**
+- If you output a final text answer while a checklist item is still missing, YOU HAVE FAILED.
+- Minimize "chatter". Just call the tools.
 """
 
-tools = [search_tool]
+tools = [search_tool, parse_tool]
+memory = MemorySaver()
 
 model = ChatOllama(model="qwen3:30b", temperature=0.5)
-agent = Agent(model=model, tools=tools, system=system)
+agent = Agent(model=model, tools=tools, system=system, checkpointer=memory)
 
 dot_source = agent.graph.get_graph().draw_mermaid_png()
 with open("react_agent_graph.png", "wb") as f:
     f.write(dot_source)
 
-messages = [HumanMessage("Quand se déroulera le prochain 'Montagne en Scène' ? Quels sont les films/documentaires qui seront projetés ?")]
-print(agent.graph.invoke({"messages": messages})["messages"][-1].content)
+"""messages = [HumanMessage("Quel est la valeur du S&P500 d'hier ?")]
+for message, metadata in agent.graph.stream({"messages": messages}, {"configurable": {"thread_id": "1"}}, stream_mode="messages"):
+    if message.content and isinstance(message, AIMessageChunk) and metadata["langgraph_node"] == "llm":
+        print(message.content, end="", flush=True)"""
+
+search_agent(agent)
