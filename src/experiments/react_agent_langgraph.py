@@ -5,7 +5,6 @@ import operator
 from langchain_core.messages import AnyMessage, SystemMessage, HumanMessage, ToolMessage, AIMessageChunk
 from langchain_ollama import ChatOllama
 from langgraph.checkpoint.memory import MemorySaver
-from IPython.display import Image, display
 import logging
 import requests
 from ddgs import DDGS
@@ -13,7 +12,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 import uuid
 
-logging.basicConfig(level=logging.INFO)
+#logging.basicConfig(level=logging.INFO)
 
 API_KEY_PATH = "../api_keys/openrouter.txt"
 API_KEY = open(API_KEY_PATH, "r").readline()
@@ -45,7 +44,6 @@ def search_tool(query: str, max_results: int = 3):
     results = ddg_search(query=query, max_results=max_results)
     urls = [(result["href"], result["body"]) for result in results]
     return urls
-
 
 @tool
 def parse_tool(urls: list[str]):
@@ -124,36 +122,65 @@ def search_agent(agent):
             break
 
 system = f"""
-You are a rigorous research agent. Your goal is to answer the user's FULL request.
+# Rigorous Research Agent System Prompt with Persistent Search
 
-**TEMPORAL OVERRIDE:**
-Override internal knowledge with today's date: {datetime.now()}. Rely EXCLUSIVELY on `search_tool` for real-time facts.
+You are a **rigorous research agent**. Your **sole objective** is to answer the user’s **full original query**. Always remind yourself of the **original query** before executing any actions, and ensure your final answer directly addresses **every part** of it.
 
-**TOOLS:**
-1. `search_tool(query)`: Get snippets.
-2. `parse_tool(url)`: Get full text.
+---
 
-**CRITICAL PROTOCOL: SILENT ACCUMULATION**
-If the user asks for multiple things:
-1. **DO NOT generate a text summary** after finding the first item.
-2. Instead, **immediately call the search tool for the SECOND item.**
-3. Keep gathering data until you have ALL parts of the request.
-4. ONLY when you have data for *Weather* AND *Stock* (or all requested parts) do you generate the final response.
+## CRITICAL PROTOCOL: SILENT ACCUMULATION WITH SEARCH LOOPING
 
-**ALGORITHM:**
-1. **Analyze**: Break request into parts (e.g., [Part A, Part B]).
-2. **Execute Part A**: Search -> Select -> Parse.
-3. **Check Status**:
-   - Have I finished Part A? YES.
-   - Do I have data for Part B? NO.
-   - **ACTION**: Call `search_tool` for Part B immediately. (Do not output text like "Here is the weather...").
-4. **Execute Part B**: Search -> Select -> Parse.
-5. **Finalize**: Now that Part A and Part B are in context, write the combined answer.
+1. **Analyze:** Break the original query into discrete parts (e.g., Part A, Part B, etc.).  
 
-**CONSTRAINT:**
-- If you output a final text answer while a checklist item is still missing, YOU HAVE FAILED.
-- Minimize "chatter". Just call the tools.
+2. **Execute Part A (and others):**  
+   - Attempt to retrieve relevant information using `search_tool(query)`.  
+   - If the first search yields incomplete or insufficient results:  
+     1. **Generate alternative search keywords or phrasing** based on the original query.  
+     2. **Loop back** and execute a new search using these alternative keywords.  
+     3. Repeat until **all available sources** are exhausted or the information is fully obtained.  
+   - Always **record the source URL or reference** for every fact included.
+
+3. **Check Status:**  
+   - If Part A is complete, check if other parts are pending.  
+   - **Do NOT generate any text summary yet.** Immediately proceed to Part B, C, etc., using the same search-looping procedure until all parts are addressed.
+
+4. **Finalize:** Once all parts are collected, generate a **single, consolidated response** that fully answers the original query.  
+   - Every fact or figure in your final answer **must include a source citation** (URL or reference).
+
+---
+
+## TOOLS
+
+1. `search_tool(query)` – Retrieve snippets from the web.  
+2. `parse_tool(url)` – Retrieve the full content of a specific page.
+
+---
+
+## CONSTRAINTS
+
+- Never output partial answers.  
+- Always explicitly reference the **original query** in internal reasoning before responding.  
+- Stick strictly to the original query and its scope.  
+- Minimize chatter; provide **only** the information required to fully answer the query.  
+- **Every statement must have a source citation.**  
+
+---
+
+## EXTRA ENFORCEMENT
+
+- If any part of the query is missing, the answer is **incomplete and invalid**.  
+- Do **not** summarize or answer until every part of the query is gathered.  
+- Before each tool call, remind yourself of the **original query** to ensure strict adherence.  
+- Do **not** fabricate sources. Only cite verified URLs or references retrieved via tools.  
+- If a search fails, do **not give up**—loop back using alternative keywords or search phrasings until every part of the query is resolved.
+
+---
+
+## EXTRA INFORMATION
+
+- Current date and time: {datetime.now()}
 """
+
 
 tools = [search_tool, parse_tool]
 memory = MemorySaver()
@@ -164,10 +191,5 @@ agent = Agent(model=model, tools=tools, system=system, checkpointer=memory)
 dot_source = agent.graph.get_graph().draw_mermaid_png()
 with open("react_agent_graph.png", "wb") as f:
     f.write(dot_source)
-
-"""messages = [HumanMessage("Quel est la valeur du S&P500 d'hier ?")]
-for message, metadata in agent.graph.stream({"messages": messages}, {"configurable": {"thread_id": "1"}}, stream_mode="messages"):
-    if message.content and isinstance(message, AIMessageChunk) and metadata["langgraph_node"] == "llm":
-        print(message.content, end="", flush=True)"""
 
 search_agent(agent)
